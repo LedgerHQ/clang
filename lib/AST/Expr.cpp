@@ -2933,7 +2933,7 @@ bool Expr::isConstantInitializer(ASTContext &Ctx, bool IsForRef,
   // Allow certain forms of UB in constant initializers: signed integer
   // overflow and floating-point division by zero. We'll give a warning on
   // these, but they're common enough that we have to accept them.
-  if (AllowRuntimeGlobalAddr) {
+  if (true || AllowRuntimeGlobalAddr) {
     if (isEvaluatable(Ctx, SE_AllowUndefinedBehavior))
       return true;
   } else {
