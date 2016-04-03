@@ -9681,6 +9681,15 @@ void Sema::AddInitializerToDecl(Decl *RealDecl, Expr *Init,
     VDecl->setInitStyle(VarDecl::ListInit);
   }
 
+  // If the initialiser uses an address that is not known at compile time but
+  // is otherwise constant, it should be initialised at runtime.
+  if ((getLangOpts().ROPIInitLowering || getLangOpts().RWPIInitLowering) &&
+      !Init->isValueDependent() && !VDecl->isInvalidDecl() &&
+      Init->isConstantInitializer(Context, false, nullptr, true) &&
+      !Init->isConstantInitializer(Context, false, nullptr, false)) {
+    VDecl->setNeedsPILowering(true);
+  }
+
   CheckCompleteVariableDeclaration(VDecl);
 }
 
@@ -10337,6 +10346,19 @@ Sema::FinalizeDeclaration(Decl *ThisDecl) {
   if (VD->isFileVarDecl() && !VD->getDescribedVarTemplate() &&
       !isa<VarTemplatePartialSpecializationDecl>(VD))
     MarkUnusedFileScopedDecl(VD);
+
+  // Warn about cases where we won't know if a variable will be in RO or RW
+  // memory, and the two are addressed differently. This is the case for
+  // const-qualified incomplete types, because they may need to be in RW memory
+  // because of a non-trivial constructor or mutable member.
+  if ((getLangOpts().ROPIInitLowering || getLangOpts().RWPIInitLowering) &&
+      (VD->isExternallyVisible() && VD->getType().isConstQualified())) {
+    if (TagDecl *TD = VD->getType()->getAsTagDecl()) {
+      if (!TD->isCompleteDefinition()) {
+        Diag(VD->getLocation(), diag::warn_embedded_pi_const_incomplete_type);
+      }
+    }
+  }
 
   // Now we have parsed the initializer and can update the table of magic
   // tag values.

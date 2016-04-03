@@ -741,6 +741,16 @@ namespace {
       return keepEvaluatingAfterUndefinedBehavior();
     }
 
+    /// Note that we have taken the address of a read-only global value.
+    void noteROAddr() {
+      EvalStatus.ROAddrTaken = true;
+    }
+
+    /// Note that we have taken the address of a read-write global value.
+    void noteRWAddr() {
+      EvalStatus.RWAddrTaken = true;
+    }
+
     /// Should we continue evaluation as much as possible after encountering a
     /// construct which can't be reduced to a value?
     bool keepEvaluatingAfterFailure() {
@@ -4064,6 +4074,27 @@ protected:
 
   bool ZeroInitialization(const Expr *E) { return Error(E); }
 
+  // Check for taking the address of a global which might not be known at
+  // static link-time.
+  void CheckPotentialGlobalAddr(const Expr *E) {
+    while (const MemberExpr *ME = dyn_cast<MemberExpr>(E)) {
+      E = ME->getBase();
+    }
+    if (const DeclRefExpr *DRE = dyn_cast<DeclRefExpr>(E)) {
+      if (isa<FunctionDecl>(DRE->getDecl()))
+        Info.noteROAddr();
+      if (const VarDecl *VD = dyn_cast<VarDecl>(DRE->getDecl())) {
+        if (VD->hasGlobalStorage()) {
+          if (VD->getType().isConstQualified() && !VD->needsPILowering()) {
+            Info.noteROAddr();
+          } else {
+            Info.noteRWAddr();
+          }
+        }
+      }
+    }
+  }
+
 public:
   ExprEvaluatorBase(EvalInfo &Info) : Info(Info) {}
 
@@ -4949,6 +4980,7 @@ bool PointerExprEvaluator::VisitBinaryOperator(const BinaryOperator *E) {
 }
 
 bool PointerExprEvaluator::VisitUnaryAddrOf(const UnaryOperator *E) {
+  CheckPotentialGlobalAddr(E->getSubExpr());
   return EvaluateLValue(E->getSubExpr(), Result, Info);
 }
 
@@ -5025,7 +5057,7 @@ bool PointerExprEvaluator::VisitCastExpr(const CastExpr* E) {
       return true;
     }
   }
-  case CK_ArrayToPointerDecay:
+  case CK_ArrayToPointerDecay: {
     if (SubExpr->isGLValue()) {
       if (!EvaluateLValue(SubExpr, Result, Info))
         return false;
@@ -5035,6 +5067,9 @@ bool PointerExprEvaluator::VisitCastExpr(const CastExpr* E) {
                            Info, Result, SubExpr))
         return false;
     }
+
+    CheckPotentialGlobalAddr(E->getSubExpr());
+
     // The result is a pointer to the first element of the array.
     if (const ConstantArrayType *CAT
           = Info.Ctx.getAsConstantArrayType(SubExpr->getType()))
@@ -5042,8 +5077,9 @@ bool PointerExprEvaluator::VisitCastExpr(const CastExpr* E) {
     else
       Result.Designator.setInvalid();
     return true;
-
+  }
   case CK_FunctionToPointerDecay:
+    Info.noteROAddr();
     return EvaluateLValue(SubExpr, Result, Info);
   }
 
@@ -8902,9 +8938,10 @@ bool Expr::EvaluateAsInitializer(APValue &Value, const ASTContext &Ctx,
                                  const VarDecl *VD,
                             SmallVectorImpl<PartialDiagnosticAt> &Notes) const {
   // FIXME: Evaluating initializers for large array and record types can cause
-  // performance problems. Only do so in C++11 for now.
+  // performance problems. Only do so in C++11, ROPI and RWPI for now.
   if (isRValue() && (getType()->isArrayType() || getType()->isRecordType()) &&
-      !Ctx.getLangOpts().CPlusPlus11)
+      !(Ctx.getLangOpts().CPlusPlus11 || Ctx.getLangOpts().ROPIInitLowering ||
+        Ctx.getLangOpts().RWPIInitLowering))
     return false;
 
   Expr::EvalStatus EStatus;
@@ -8945,6 +8982,16 @@ bool Expr::isEvaluatable(const ASTContext &Ctx, SideEffectsKind SEK) const {
   EvalResult Result;
   return EvaluateAsRValue(Result, Ctx) &&
          !hasUnacceptableSideEffect(Result, SEK);
+}
+
+/// isEvaluatableWithoutRuntimeGlobalAddr - Call EvaluateAsRValue to see if this
+/// expression can be constant folded without using an address that will not be
+/// known at static-link time, but discard the result.
+bool Expr::isEvaluatableWithoutRuntimeGlobalAddr(const ASTContext &Ctx) const {
+  EvalResult Result;
+  return EvaluateAsRValue(Result, Ctx) && !Result.HasSideEffects &&
+         !(Result.ROAddrTaken && Ctx.getLangOpts().ROPIInitLowering) &&
+         !(Result.RWAddrTaken && Ctx.getLangOpts().RWPIInitLowering);
 }
 
 APSInt Expr::EvaluateKnownConstInt(const ASTContext &Ctx,

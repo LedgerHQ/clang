@@ -849,4 +849,8 @@ def InvalidOrNonExistentDirectory : DiagGroup<"invalid-or-nonexistent-directory"
 
 def OptionIgnored : DiagGroup<"option-ignored">;
 
+// A warning group for code that may not be compatible with embedded
+// position-independence.
+def EmbeddedPI : DiagGroup<"embedded-pi">;
+
 def UnknownArgument : DiagGroup<"unknown-argument">;

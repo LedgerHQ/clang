@@ -155,3 +155,7 @@
 // CHECK-V81A-FEATURE-2: "-cc1"{{.*}} "-triple" "aarch64{{.*}}" "-target-feature" "+neon" "-target-feature" "+v8.1a" "-target-feature" "-crypto"
 // CHECK-V81A-FEATURE-3: "-cc1"{{.*}} "-triple" "aarch64{{.*}}" "-target-feature" "+v8.1a" "-target-feature" "-neon"
 
+// RUN: %clang -target aarch64-arm-none-eabi -x c -E -dM %s -o -       | FileCheck %s --check-prefix=NO-FPIC
+// RUN: %clang -target aarch64-arm-none-eabi -x c -E -dM %s -o - -fpic | FileCheck %s --check-prefix=FPIC
+// NO-FPIC-NOT: #define __APCS_FPIC
+// FPIC: #define __APCS_FPIC 1

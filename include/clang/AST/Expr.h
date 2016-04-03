@@ -525,13 +525,22 @@ public:
   /// If this expression is not constant and Culprit is non-null,
   /// it is used to store the address of first non constant expr.
   bool isConstantInitializer(ASTContext &Ctx, bool ForRef,
-                             const Expr **Culprit = nullptr) const;
+                             const Expr **Culprit = nullptr, 
+                             bool AllowRuntimeGlobalAddr = true) const;
 
   /// EvalStatus is a struct with detailed info about an evaluation in progress.
   struct EvalStatus {
     /// \brief Whether the evaluated expression has side effects.
     /// For example, (f() && 0) can be folded, but it still has side effects.
     bool HasSideEffects;
+
+    /// ROAddrTaken - Whether the evaluated expression depends on the address of
+    /// read-only global data or code.
+    bool ROAddrTaken;
+    /// RWAddrTaken - Whether the evaluated expression depends on the address of
+    /// writable global data.
+    bool RWAddrTaken;
+
 
     /// \brief Whether the evaluation hit undefined behavior.
     /// For example, 1.0 / 0.0 can be folded to Inf, but has undefined behavior.
@@ -548,7 +557,7 @@ public:
     SmallVectorImpl<PartialDiagnosticAt> *Diag;
 
     EvalStatus()
-        : HasSideEffects(false), HasUndefinedBehavior(false), Diag(nullptr) {}
+        : HasSideEffects(false), ROAddrTaken(false), RWAddrTaken(false), HasUndefinedBehavior(false), Diag(nullptr) {}
 
     // hasSideEffects - Return true if the evaluated expression has
     // side effects.
@@ -597,6 +606,12 @@ public:
   /// constant folded without side-effects, but discard the result.
   bool isEvaluatable(const ASTContext &Ctx,
                      SideEffectsKind AllowSideEffects = SE_NoSideEffects) const;
+
+  /// isEvaluatableWithoutRuntimeGlobalAddr - Call EvaluateAsRValue to see if this expression can be
+  /// constant folded without side-effects and without needing to know an
+  /// address that will not be known at static link time, but discard the
+  /// result.
+  bool isEvaluatableWithoutRuntimeGlobalAddr(const ASTContext &Ctx) const;
 
   /// HasSideEffects - This routine returns true for all those expressions
   /// which have any effect other than producing a value. Example is a function

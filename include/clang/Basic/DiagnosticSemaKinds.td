@@ -8288,4 +8288,17 @@ def warn_objc_redundant_qualified_class_type : Warning<
   "parameterized class %0 already conforms to the protocols listed; did you "
   "forget a '*'?">, InGroup<ObjCProtocolQualifiers>;
 
+let CategoryName = "Embedded PI Issue" in {
+def warn_embedded_pi_const_extern_variable : Warning<
+  "embedded position-independent lowering of %0 made it non-const, "
+  "other translation units will access it incorrectly">,
+  InGroup<EmbeddedPI>;
+
+def warn_embedded_pi_const_incomplete_type : Warning<
+  "externally-visible const variable has incomplete type, "
+  "other translation units may access it incorrectly when "
+  "using embedded position-independence">,
+  InGroup<EmbeddedPI>;
+}
+
 } // end of sema component.

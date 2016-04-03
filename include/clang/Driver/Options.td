@@ -997,6 +997,14 @@ def fpie : Flag<["-"], "fpie">, Group<f_Group>;
 def fno_pie : Flag<["-"], "fno-pie">, Group<f_Group>;
 def fplugin_EQ : Joined<["-"], "fplugin=">, Group<f_Group>, Flags<[DriverOption]>, MetaVarName<"<dsopath>">,
   HelpText<"Load the named plugin (dynamic shared object)">;
+def fropi : Flag<["-"], "fropi">, Group<f_Group>, Flags<[CC1Option]>;
+def fno_ropi : Flag<["-"], "fno-ropi">, Group<f_Group>;
+def frwpi : Flag<["-"], "frwpi">, Group<f_Group>, Flags<[CC1Option]>;
+def fno_rwpi : Flag<["-"], "fno-rwpi">, Group<f_Group>;
+def fropi_lowering : Flag<["-"], "fropi-lowering">, Group<f_Group>, Flags<[CC1Option]>;
+def fno_ropi_lowering : Flag<["-"], "fno-ropi-lowering">, Group<f_Group>;
+def frwpi_lowering : Flag<["-"], "frwpi-lowering">, Group<f_Group>, Flags<[CC1Option]>;
+def fno_rwpi_lowering : Flag<["-"], "fno-rwpi-lowering">, Group<f_Group>;
 def fprofile_arcs : Flag<["-"], "fprofile-arcs">, Group<f_Group>;
 def fno_profile_arcs : Flag<["-"], "fno-profile-arcs">, Group<f_Group>;
 def framework : Separate<["-"], "framework">, Flags<[LinkerInput]>;

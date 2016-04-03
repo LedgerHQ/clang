@@ -4916,6 +4916,13 @@ public:
 
     if (ArchKind == llvm::ARM::AK_ARMV8_1A)
       Builder.defineMacro("__ARM_FEATURE_QRDMX", "1");
+
+    if (Opts.PICLevel)
+      Builder.defineMacro("__APCS_FPIC", "1");
+    if (Opts.ROPI)
+      Builder.defineMacro("__APCS_ROPI", "1");
+    if (Opts.RWPI)
+      Builder.defineMacro("__APCS_RWPI", "1");
   }
 
   ArrayRef<Builtin::Info> getTargetBuiltins() const override {
@@ -5428,6 +5435,9 @@ public:
     Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_2");
     Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_4");
     Builder.defineMacro("__GCC_HAVE_SYNC_COMPARE_AND_SWAP_8");
+
+    if (Opts.PICLevel)
+      Builder.defineMacro("__APCS_FPIC", "1");
   }
 
   ArrayRef<Builtin::Info> getTargetBuiltins() const override {

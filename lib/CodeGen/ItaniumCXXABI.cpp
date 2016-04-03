@@ -2109,6 +2109,7 @@ static void emitGlobalDtorWithCXAAtExit(CodeGenFunction &CGF,
   // Create a variable that binds the atexit to this shared object.
   llvm::Constant *handle =
     CGF.CGM.CreateRuntimeVariable(CGF.Int8Ty, "__dso_handle");
+  cast<llvm::GlobalVariable>(handle)->setConstant(true);
 
   llvm::Value *args[] = {
     llvm::ConstantExpr::getBitCast(dtor, dtorTy),

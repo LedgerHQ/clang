@@ -2097,7 +2097,12 @@ CodeGenModule::GetOrCreateLLVMGlobal(StringRef MangledName,
   if (D) {
     // FIXME: This code is overly simple and should be merged with other global
     // handling.
-    GV->setConstant(isTypeConstant(D->getType(), false));
+    bool HasTrivialDefaultConstructor = false;
+    if (const CXXRecordDecl *Record =
+            Context.getBaseElementType(D->getType())->getAsCXXRecordDecl())
+      HasTrivialDefaultConstructor =
+          Record->hasDefinition() && Record->hasTrivialDefaultConstructor();
+    GV->setConstant(isTypeConstant(D->getType(), HasTrivialDefaultConstructor));
 
     GV->setAlignment(getContext().getDeclAlign(D).getQuantity());
 
@@ -2344,6 +2349,7 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
   CXXRecordDecl *RD = ASTTy->getBaseElementTypeUnsafe()->getAsCXXRecordDecl();
   bool NeedsGlobalCtor = false;
   bool NeedsGlobalDtor = RD && !RD->hasTrivialDestructor();
+  bool NeedsPILowering = false;
 
   const VarDecl *InitDecl;
   const Expr *InitExpr = D->getAnyInitializer(InitDecl);
@@ -2368,13 +2374,12 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
     Init = EmitNullConstant(D->getType());
   } else {
     initializedGlobalDecl = GlobalDecl(D);
-    Init = EmitConstantInit(*InitDecl);
+    Init = EmitConstantInit(*InitDecl, nullptr);
 
+    QualType T = InitExpr->getType();
+    if (D->getType()->isReferenceType())
+      T = D->getType();
     if (!Init) {
-      QualType T = InitExpr->getType();
-      if (D->getType()->isReferenceType())
-        T = D->getType();
-
       if (getLangOpts().CPlusPlus) {
         Init = EmitNullConstant(T);
         NeedsGlobalCtor = true;
@@ -2382,6 +2387,17 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
         ErrorUnsupported(D, "static initializer");
         Init = llvm::UndefValue::get(getTypes().ConvertType(T));
       }
+    } else if (D->needsPILowering()) {
+        NeedsPILowering = true;
+        Init = llvm::UndefValue::get(getTypes().ConvertType(T));
+        if (D->isExternallyVisible() && isTypeConstant(D->getType(), true)) {
+          // We are emitting a non-constant for an externally-visible global
+          // that would otherwise be constant, so any other translation units
+          // which access it as ROPI/RWPI will do so incorrectly.
+          getDiags().Report(D->getLocation(),
+                            diag::warn_embedded_pi_const_extern_variable)
+              << D->getName();
+        }
     } else {
       // We don't need an initializer, so remove the entry for the delayed
       // initializer position (just in case this entry was delayed) if we
@@ -2455,8 +2471,11 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
   }
   GV->setInitializer(Init);
 
+  if (NeedsPILowering)
+    GV->setExternallyInitialized(true);
+
   // If it is safe to mark the global 'constant', do so now.
-  GV->setConstant(!NeedsGlobalCtor && !NeedsGlobalDtor &&
+  GV->setConstant(!NeedsGlobalCtor && !NeedsGlobalDtor && !NeedsPILowering &&
                   isTypeConstant(D->getType(), true));
 
   // If it is in a read-only section, mark it 'constant'.
@@ -2508,8 +2527,8 @@ void CodeGenModule::EmitGlobalVarDefinition(const VarDecl *D,
   maybeSetTrivialComdat(*D, *GV);
 
   // Emit the initializer function if necessary.
-  if (NeedsGlobalCtor || NeedsGlobalDtor)
-    EmitCXXGlobalVarDeclInitFunc(D, GV, NeedsGlobalCtor);
+  if (NeedsGlobalCtor || NeedsGlobalDtor || NeedsPILowering)
+    EmitCXXGlobalVarDeclInitFunc(D, GV, NeedsGlobalCtor || NeedsPILowering);
 
   SanitizerMD->reportGlobalToASan(GV, *D, NeedsGlobalCtor);
 

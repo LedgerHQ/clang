@@ -299,6 +299,18 @@ CodeGenFunction::AddInitializerToStaticVarDecl(const VarDecl &D,
     }
     return GV;
   }
+  
+  if (D.needsPILowering()) {
+    QualType T = D.getAnyInitializer()->getType();
+    if (D.getType()->isReferenceType())
+      T = D.getType();
+
+    GV->setConstant(false);
+    GV->setInitializer(llvm::UndefValue::get(getTypes().ConvertType(T)));
+    GV->setExternallyInitialized(true);
+    CGM.EmitCXXGlobalVarDeclInitFunc(&D, GV, true);
+    return GV;
+  }
 
   // The initializer may differ in type from the global. Rewrite
   // the global to match the initializer.  (We have to do this
@@ -1245,10 +1257,19 @@ void CodeGenFunction::EmitAutoVarInit(const AutoVarEmission &emission) {
     // Otherwise, create a temporary global with the initializer then
     // memcpy from the global to the alloca.
     std::string Name = getStaticDeclName(CGM, D);
-    llvm::GlobalVariable *GV =
-      new llvm::GlobalVariable(CGM.getModule(), constant->getType(), true,
+    llvm::GlobalVariable *GV;
+    if (D.needsPILowering()) {
+      llvm::UndefValue *Undef = llvm::UndefValue::get(constant->getType());
+      GV = new llvm::GlobalVariable(CGM.getModule(), constant->getType(), false,
+                                    llvm::GlobalValue::PrivateLinkage, Undef,
+                                    Name);
+      GV->setExternallyInitialized(true);
+      CGM.EmitCXXGlobalVarDeclInitFunc(&D, GV, true);
+    } else {
+      GV = new llvm::GlobalVariable(CGM.getModule(), constant->getType(), true,
                                llvm::GlobalValue::PrivateLinkage,
                                constant, Name);
+    }
     GV->setAlignment(Loc.getAlignment().getQuantity());
     GV->setUnnamedAddr(true);
 

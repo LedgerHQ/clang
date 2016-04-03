@@ -824,6 +824,10 @@ protected:
     /// declared in the same block scope. This controls whether we should merge
     /// the type of this declaration with its previous declaration.
     unsigned PreviousDeclInSameBlockScope : 1;
+
+    /// \biref Whether this variable needs a dynamic initializer due to being
+    /// initialized to an address that is not known until runtime.
+    unsigned NeedsPILowering : 1;
   };
 
   union {
@@ -1210,6 +1214,16 @@ public:
   void setPreviousDeclInSameBlockScope(bool Same) {
     assert(!isa<ParmVarDecl>(this));
     NonParmVarDeclBits.PreviousDeclInSameBlockScope = Same;
+  }
+
+  /// Whether this variable needs a dynamic initializer due to being initialized
+  /// to an address that is not known until runtime.
+  bool needsPILowering() const {
+    return isa<ParmVarDecl>(this) ? false : NonParmVarDeclBits.NeedsPILowering;
+  }
+  void setNeedsPILowering(bool Val) {
+    assert(!isa<ParmVarDecl>(this));
+    NonParmVarDeclBits.NeedsPILowering = Val;
   }
 
   /// \brief If this variable is an instantiated static data member of a

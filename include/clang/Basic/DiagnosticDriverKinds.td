@@ -231,4 +231,9 @@ def warn_drv_ps4_sdk_dir : Warning<
   InGroup<InvalidOrNonExistentDirectory>;
 
 def err_drv_unsupported_linker : Error<"unsupported value '%0' for -linker option">;
+
+def err_drv_ropi_rwpi_incompatible_with_pic : Error<
+  "embedded and GOT-based position independence are incompatible">;
+def err_drv_ropi_incompatible_with_cxx : Error<
+  "ROPI is not compatible with c++">;
 }

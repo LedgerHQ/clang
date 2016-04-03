@@ -2766,7 +2766,8 @@ bool Expr::hasAnyTypeDependentArguments(ArrayRef<Expr *> Exprs) {
 }
 
 bool Expr::isConstantInitializer(ASTContext &Ctx, bool IsForRef,
-                                 const Expr **Culprit) const {
+                                 const Expr **Culprit,
+                                 bool AllowRuntimeGlobalAddr) const {
   // This function is attempting whether an expression is an initializer
   // which can be evaluated at compile-time. It very closely parallels
   // ConstExprEmitter in CGExprConstant.cpp; if they don't match, it
@@ -2801,7 +2802,8 @@ bool Expr::isConstantInitializer(ASTContext &Ctx, bool IsForRef,
 
       // Trivial copy constructor
       assert(CE->getNumArgs() == 1 && "trivial ctor with > 1 argument");
-      return CE->getArg(0)->isConstantInitializer(Ctx, false, Culprit);
+      return CE->getArg(0)
+          ->isConstantInitializer(Ctx, false, Culprit, AllowRuntimeGlobalAddr);
     }
 
     break;
@@ -2811,19 +2813,23 @@ bool Expr::isConstantInitializer(ASTContext &Ctx, bool IsForRef,
     // "struct x {int x;} x = (struct x) {};".
     // FIXME: This accepts other cases it shouldn't!
     const Expr *Exp = cast<CompoundLiteralExpr>(this)->getInitializer();
-    return Exp->isConstantInitializer(Ctx, false, Culprit);
+    return Exp->isConstantInitializer(Ctx, false, Culprit,
+                                      AllowRuntimeGlobalAddr);
   }
   case DesignatedInitUpdateExprClass: {
     const DesignatedInitUpdateExpr *DIUE = cast<DesignatedInitUpdateExpr>(this);
-    return DIUE->getBase()->isConstantInitializer(Ctx, false, Culprit) &&
-           DIUE->getUpdater()->isConstantInitializer(Ctx, false, Culprit);
+    return DIUE->getBase()->isConstantInitializer(Ctx, false, Culprit,
+                                                  AllowRuntimeGlobalAddr) &&
+           DIUE->getUpdater()->isConstantInitializer(Ctx, false, Culprit,
+                                                     AllowRuntimeGlobalAddr);
   }
   case InitListExprClass: {
     const InitListExpr *ILE = cast<InitListExpr>(this);
     if (ILE->getType()->isArrayType()) {
       unsigned numInits = ILE->getNumInits();
       for (unsigned i = 0; i < numInits; i++) {
-        if (!ILE->getInit(i)->isConstantInitializer(Ctx, false, Culprit))
+        if (!ILE->getInit(i)->isConstantInitializer(Ctx, false, Culprit,
+                                                    AllowRuntimeGlobalAddr))
           return false;
       }
       return true;
@@ -2853,7 +2859,8 @@ bool Expr::isConstantInitializer(ASTContext &Ctx, bool IsForRef,
             }
           } else {
             bool RefType = Field->getType()->isReferenceType();
-            if (!Elt->isConstantInitializer(Ctx, RefType, Culprit))
+            if (!Elt->isConstantInitializer(Ctx, RefType, Culprit,
+                                            AllowRuntimeGlobalAddr))
               return false;
           }
         }
@@ -2867,11 +2874,11 @@ bool Expr::isConstantInitializer(ASTContext &Ctx, bool IsForRef,
   case NoInitExprClass:
     return true;
   case ParenExprClass:
-    return cast<ParenExpr>(this)->getSubExpr()
-      ->isConstantInitializer(Ctx, IsForRef, Culprit);
+    return cast<ParenExpr>(this)->getSubExpr()->isConstantInitializer(
+        Ctx, IsForRef, Culprit, AllowRuntimeGlobalAddr);
   case GenericSelectionExprClass:
     return cast<GenericSelectionExpr>(this)->getResultExpr()
-      ->isConstantInitializer(Ctx, IsForRef, Culprit);
+      ->isConstantInitializer(Ctx, IsForRef, Culprit, AllowRuntimeGlobalAddr);
   case ChooseExprClass:
     if (cast<ChooseExpr>(this)->isConditionDependent()) {
       if (Culprit)
@@ -2879,11 +2886,12 @@ bool Expr::isConstantInitializer(ASTContext &Ctx, bool IsForRef,
       return false;
     }
     return cast<ChooseExpr>(this)->getChosenSubExpr()
-      ->isConstantInitializer(Ctx, IsForRef, Culprit);
+      ->isConstantInitializer(Ctx, IsForRef, Culprit, AllowRuntimeGlobalAddr);
   case UnaryOperatorClass: {
     const UnaryOperator* Exp = cast<UnaryOperator>(this);
     if (Exp->getOpcode() == UO_Extension)
-      return Exp->getSubExpr()->isConstantInitializer(Ctx, false, Culprit);
+      return Exp->getSubExpr()->isConstantInitializer(Ctx, false, Culprit,
+                                                      AllowRuntimeGlobalAddr);
     break;
   }
   case CXXFunctionalCastExprClass:
@@ -2903,29 +2911,35 @@ bool Expr::isConstantInitializer(ASTContext &Ctx, bool IsForRef,
         CE->getCastKind() == CK_ConstructorConversion ||
         CE->getCastKind() == CK_NonAtomicToAtomic ||
         CE->getCastKind() == CK_AtomicToNonAtomic)
-      return CE->getSubExpr()->isConstantInitializer(Ctx, false, Culprit);
+      return CE->getSubExpr()->isConstantInitializer(Ctx, false, Culprit, 
+                                                     AllowRuntimeGlobalAddr);
 
     break;
   }
   case MaterializeTemporaryExprClass:
     return cast<MaterializeTemporaryExpr>(this)->GetTemporaryExpr()
-      ->isConstantInitializer(Ctx, false, Culprit);
+      ->isConstantInitializer(Ctx, false, Culprit, AllowRuntimeGlobalAddr);
 
   case SubstNonTypeTemplateParmExprClass:
     return cast<SubstNonTypeTemplateParmExpr>(this)->getReplacement()
-      ->isConstantInitializer(Ctx, false, Culprit);
+      ->isConstantInitializer(Ctx, false, Culprit, AllowRuntimeGlobalAddr);
   case CXXDefaultArgExprClass:
     return cast<CXXDefaultArgExpr>(this)->getExpr()
-      ->isConstantInitializer(Ctx, false, Culprit);
+      ->isConstantInitializer(Ctx, false, Culprit, AllowRuntimeGlobalAddr);
   case CXXDefaultInitExprClass:
     return cast<CXXDefaultInitExpr>(this)->getExpr()
-      ->isConstantInitializer(Ctx, false, Culprit);
+      ->isConstantInitializer(Ctx, false, Culprit, AllowRuntimeGlobalAddr);
   }
   // Allow certain forms of UB in constant initializers: signed integer
   // overflow and floating-point division by zero. We'll give a warning on
   // these, but they're common enough that we have to accept them.
-  if (isEvaluatable(Ctx, SE_AllowUndefinedBehavior))
-    return true;
+  if (AllowRuntimeGlobalAddr) {
+    if (isEvaluatable(Ctx, SE_AllowUndefinedBehavior))
+      return true;
+  } else {
+    if (isEvaluatableWithoutRuntimeGlobalAddr(Ctx))
+      return true;
+  }
   if (Culprit)
     *Culprit = this;
   return false;

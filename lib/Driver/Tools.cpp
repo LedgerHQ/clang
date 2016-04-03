@@ -3314,8 +3314,8 @@ static void addPS4ProfileRTArgs(const ToolChain &TC, const ArgList &Args,
 /// Parses the various -fpic/-fPIC/-fpie/-fPIE arguments.  Then,
 /// smooshes them together with platform defaults, to decide whether
 /// this compile should be using PIC mode or not. Returns a tuple of
-/// (RelocationModel, PICLevel, IsPIE).
-static std::tuple<llvm::Reloc::Model, unsigned, bool>
+/// (RelocationModel, PICLevel, IsPIE, LowerROPI, LowerRWPI).
+static std::tuple<llvm::Reloc::Model, unsigned, bool, bool, bool>
 ParsePICArgs(const ToolChain &ToolChain, const llvm::Triple &Triple,
              const ArgList &Args) {
   // FIXME: why does this code...and so much everywhere else, use both
@@ -3440,13 +3440,68 @@ ParsePICArgs(const ToolChain &ToolChain, const llvm::Triple &Triple,
     // match that of llvm-gcc and Apple GCC before that.
     PIC = ToolChain.isPICDefault() && ToolChain.isPICDefaultForced();
 
-    return std::make_tuple(llvm::Reloc::DynamicNoPIC, PIC ? 2 : 0, false);
+    return std::make_tuple(llvm::Reloc::DynamicNoPIC, PIC ? 2 : 0, false, false,
+                           false);
+  }
+  
+  bool EmbeddedPISupported;
+  switch (ToolChain.getArch()) {
+    case llvm::Triple::arm:
+    case llvm::Triple::armeb:
+    case llvm::Triple::thumb:
+    case llvm::Triple::thumbeb:
+      EmbeddedPISupported = true;
+      break;
+    default:
+      EmbeddedPISupported = false;
+      break;
+  }
+
+  bool ROPI = false, RWPI = false;
+  Arg* LastROPIArg = Args.getLastArg(options::OPT_fropi, options::OPT_fno_ropi);
+  if (LastROPIArg && LastROPIArg->getOption().matches(options::OPT_fropi)) {
+    if (!EmbeddedPISupported)
+      ToolChain.getDriver().Diag(diag::err_drv_unsupported_opt_for_target)
+          << LastROPIArg->getSpelling() << ToolChain.getTriple().str();
+    ROPI = true;
+  }
+  Arg *LastRWPIArg = Args.getLastArg(options::OPT_frwpi, options::OPT_fno_rwpi);
+  if (LastRWPIArg && LastRWPIArg->getOption().matches(options::OPT_frwpi)) {
+    if (!EmbeddedPISupported)
+      ToolChain.getDriver().Diag(diag::err_drv_unsupported_opt_for_target)
+          << LastRWPIArg->getSpelling() << ToolChain.getTriple().str();
+    RWPI = true;
+  }
+  
+  // ROPI and RWPI are not comaptible with PIC or PIE.
+  if ((ROPI || RWPI) && (PIC || PIE)) {
+    ToolChain.getDriver().Diag(diag::err_drv_ropi_rwpi_incompatible_with_pic);
   }
 
   if (PIC)
-    return std::make_tuple(llvm::Reloc::PIC_, IsPICLevelTwo ? 2 : 1, PIE);
+    return std::make_tuple(llvm::Reloc::PIC_, IsPICLevelTwo ? 2 : 1, PIE,
+                           false, false);
 
-  return std::make_tuple(llvm::Reloc::Static, 0, false);
+  // ROPI lowering is turned on by default for RWPI as well, to avoid the case
+  // where adding a dynamic init makes another variable need a dynamic init.
+  // Clang currently can't handle this case, because the IR for the variable
+  // has already been emitted.
+  bool LowerROPI = Args.hasFlag(options::OPT_fropi_lowering,
+                                options::OPT_fno_ropi_lowering,
+                                ROPI || RWPI);
+  bool LowerRWPI = Args.hasFlag(options::OPT_frwpi_lowering,
+                                options::OPT_fno_rwpi_lowering,
+                                RWPI);
+
+  llvm::Reloc::Model RelocM = llvm::Reloc::Static;
+  if (ROPI && RWPI)
+    RelocM = llvm::Reloc::ROPI_RWPI;
+  else if (ROPI)
+    RelocM = llvm::Reloc::ROPI;
+  else if (RWPI)
+    RelocM = llvm::Reloc::RWPI;
+
+  return std::make_tuple(RelocM, 0, false, LowerROPI, LowerRWPI);
 }
 
 static const char *RelocationModelName(llvm::Reloc::Model Model) {
@@ -3459,6 +3514,12 @@ static const char *RelocationModelName(llvm::Reloc::Model Model) {
     return "pic";
   case llvm::Reloc::DynamicNoPIC:
     return "dynamic-no-pic";
+  case llvm::Reloc::ROPI:
+    return "ropi";
+  case llvm::Reloc::RWPI:
+    return "rwpi";
+  case llvm::Reloc::ROPI_RWPI:
+    return "ropi-rwpi";
   }
   llvm_unreachable("Unknown Reloc::Model kind");
 }
@@ -3468,7 +3529,9 @@ static void AddAssemblerKPIC(const ToolChain &ToolChain, const ArgList &Args,
   llvm::Reloc::Model RelocationModel;
   unsigned PICLevel;
   bool IsPIE;
-  std::tie(RelocationModel, PICLevel, IsPIE) =
+  bool LowerROPI;
+  bool LowerRWPI;
+  std::tie(RelocationModel, PICLevel, IsPIE, LowerROPI, LowerRWPI) =
       ParsePICArgs(ToolChain, ToolChain.getTriple(), Args);
 
   if (RelocationModel != llvm::Reloc::Static)
@@ -3723,10 +3786,19 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
   llvm::Reloc::Model RelocationModel;
   unsigned PICLevel;
   bool IsPIE;
-  std::tie(RelocationModel, PICLevel, IsPIE) =
+  bool LowerROPI;
+  bool LowerRWPI;
+  std::tie(RelocationModel, PICLevel, IsPIE, LowerROPI, LowerRWPI) =
       ParsePICArgs(getToolChain(), Triple, Args);
 
   const char *RMName = RelocationModelName(RelocationModel);
+
+  if ((RelocationModel == llvm::Reloc::ROPI ||
+       RelocationModel == llvm::Reloc::ROPI_RWPI) &&
+      types::isCXX(Input.getType()) &&
+      !Args.hasArg(options::OPT_fallow_unsupported))
+    D.Diag(diag::err_drv_ropi_incompatible_with_cxx);
+
   if (RMName) {
     CmdArgs.push_back("-mrelocation-model");
     CmdArgs.push_back(RMName);
@@ -3739,6 +3811,16 @@ void Clang::ConstructJob(Compilation &C, const JobAction &JA,
       CmdArgs.push_back(PICLevel == 1 ? "1" : "2");
     }
   }
+  if (RelocationModel == llvm::Reloc::ROPI ||
+      RelocationModel == llvm::Reloc::ROPI_RWPI)
+    CmdArgs.push_back("-fropi");
+  if (RelocationModel == llvm::Reloc::RWPI ||
+      RelocationModel == llvm::Reloc::ROPI_RWPI)
+    CmdArgs.push_back("-frwpi");
+  if (LowerROPI)
+    CmdArgs.push_back("-fropi-lowering");
+  if (LowerRWPI)
+    CmdArgs.push_back("-frwpi-lowering");
 
   if (Arg *A = Args.getLastArg(options::OPT_meabi)) {
     CmdArgs.push_back("-meabi");
@@ -6079,7 +6161,9 @@ void ClangAs::ConstructJob(Compilation &C, const JobAction &JA,
   llvm::Reloc::Model RelocationModel;
   unsigned PICLevel;
   bool IsPIE;
-  std::tie(RelocationModel, PICLevel, IsPIE) =
+  bool LowerROPI;
+  bool LowerRWPI;
+  std::tie(RelocationModel, PICLevel, IsPIE, LowerROPI, LowerRWPI) =
       ParsePICArgs(getToolChain(), Triple, Args);
 
   const char *RMName = RelocationModelName(RelocationModel);
@@ -8453,7 +8537,9 @@ void gnutools::Assembler::ConstructJob(Compilation &C, const JobAction &JA,
   llvm::Reloc::Model RelocationModel;
   unsigned PICLevel;
   bool IsPIE;
-  std::tie(RelocationModel, PICLevel, IsPIE) =
+  bool LowerROPI;
+  bool LowerRWPI;
+  std::tie(RelocationModel, PICLevel, IsPIE, LowerROPI, LowerRWPI) =
       ParsePICArgs(getToolChain(), Triple, Args);
 
   switch (getToolChain().getArch()) {

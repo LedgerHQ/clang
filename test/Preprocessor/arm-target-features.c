@@ -409,3 +409,15 @@
 // CHECK-V81A: #define __ARM_ARCH_PROFILE 'A'
 // CHECK-V81A: __ARM_FEATURE_QRDMX 1
 // CHECK-V81A: #define __ARM_FP 0xE
+
+// RUN: %clang -target armv8-arm-none-eabi   -x c -E -dM %s -o -                  | FileCheck %s --check-prefix=NO-FPIC --check-prefix=NO-ROPI --check-prefix=NO-RWPI
+// RUN: %clang -target armv8-arm-none-eabi   -x c -E -dM %s -o - -fpic            | FileCheck %s --check-prefix=FPIC    --check-prefix=NO-ROPI --check-prefix=NO-RWPI
+// RUN: %clang -target armv8-arm-none-eabi   -x c -E -dM %s -o - -fropi           | FileCheck %s --check-prefix=NO-FPIC --check-prefix=ROPI    --check-prefix=NO-RWPI
+// RUN: %clang -target armv8-arm-none-eabi   -x c -E -dM %s -o - -frwpi           | FileCheck %s --check-prefix=NO-FPIC --check-prefix=NO-ROPI --check-prefix=RWPI
+// RUN: %clang -target armv8-arm-none-eabi   -x c -E -dM %s -o - -fropi -frwpi    | FileCheck %s --check-prefix=NO-FPIC --check-prefix=ROPI    --check-prefix=RWPI
+// NO-FPIC-NOT: #define __APCS_FPIC
+// FPIC: #define __APCS_FPIC 1
+// NO-ROPI-NOT: #define __APCS_ROPI
+// ROPI: #define __APCS_ROPI 1
+// NO-RWPI-NOT: #define __APCS_RWPI
+// RWPI: #define __APCS_RWPI 1
